@@ -2,7 +2,7 @@
 ## To-do list
 - [ ] Test bot stability over multiple servers & different hardware
 - [ ] Analyze database disk space usage after tests
-- [ ] Test `topday`, `topweek`, `topmonth` function
+- [ ] Test `topday`, `topweek`, `topmonth` functions
 - [ ] Implement the ability for server owners to change server config files
 - [ ] Cache server settings instead of pulling them from the database every time they are required
 - [ ] If there are changes to server settings, update the cache
