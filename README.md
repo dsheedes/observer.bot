@@ -1,4 +1,4 @@
-
+![Observer bot cover](https://i.imgur.com/sbY01jC.jpg)
 # Observer.bot - A Discord.js/Node bot
 A lightweight bot that monitors user activity and writes it to a database.
 Implements gathered data analyzing functionality that allows Discord server administrators/moderators/owners to increase the level of server moderation and user experience.
