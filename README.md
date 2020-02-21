@@ -1,4 +1,4 @@
-![Observer bot cover](https://i.imgur.com/sbY01jC.jpg)
+
 # Observer.bot - A Discord.js/Node bot
 A lightweight bot that monitors user activity and writes it to a database.
 Implements gathered data analyzing functionality that allows Discord server administrators/moderators/owners to increase the level of server moderation and user experience.
@@ -15,8 +15,6 @@ Implements gathered data analyzing functionality that allows Discord server admi
 	The file required is `bot.sql` and it contains only the structure of the database.
 	
 	Edit the `env.json` file with the proper database information.
-	
-	Known issue - [ER_NOT_SUPPORTED_AUTH_MODE](https://github.com/mysqljs/mysql/issues/2046)
 
 ## Usage
 

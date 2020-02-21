@@ -8,7 +8,8 @@ var connection = mysql.createPool({
   host     : env.mysql.host,
   user     : env.mysql.user,
   password : env.mysql.password,
-  database : env.mysql.database
+  database : env.mysql.database,
+  insecureAuth:true
 });
 
 const client = new Discord.Client();
@@ -17,6 +18,35 @@ let scu; //Shard Client Util, will define in ready section.
 
 let configs =  new Discord.Collection(); //Using Collection for convenience
 
+function updateConfig(sid, setting, value){
+
+    let promise = new Promise((resolve, reject) => {
+        if(setting == 'prefix'){
+            configs.set(sid, {"prefix": value, "deleteAfterQuery":configs.get(sid).deleteAfterQuery}); //Updating cached configs
+            connection.query("UPDATE `config` SET prefix = ? WHERE server = ?", [value, sid], function(error, results, fields){
+                if(error) reject(error);
+                
+                if(results.affectedRows > 0)
+                    resolve(true);
+                else resolve(false);
+             });
+        } else if(setting == "daq"){
+            configs.set(sid, {"prefix": configs.get(sid).prefix, "deleteAfterQuery":value});
+            connection.query("UPDATE `config` SET prefix = ? WHERE server = ?", [value, sid], function(error, results, fields){
+                if(error) reject(error);
+                
+                if(results.affectedRows > 0)
+                    resolve(true);
+                else resolve(false);
+             });
+        }
+        
+    });
+
+    return promise;
+
+
+}
 function matchMember(guild, value){
     let promise = new Promise((resolve, reject) => {
         guild.members.tap(member => {
@@ -80,7 +110,6 @@ let promise = new Promise((resolve, reject) => {
         if(flag == "td"){
             connection.query("SELECT name, COUNT(name) AS playtime FROM `activity` WHERE server = ? AND (date >= CURDATE()-1 AND date < CURDATE()) ORDER BY playtime LIMIT ?", [sid, limit], function(error, results, fields){
                 if(error) reject(error);
-                console.log(results);
                 if(results == null || results == undefined || results[0] == undefined || results[0].name == null){
                     reject(null);
                 }
@@ -147,10 +176,10 @@ function getServerConfig(sid){
     let promise = new Promise((resolve, reject) =>{
         connection.query("SELECT * FROM `config` WHERE server = ?", [sid],function(error, results, fields){
             if (error) reject(error);
-            let result = results[0];
 
-            if(result != null && result != undefined){      
-                resolve(result);
+
+            if(results != null && results != undefined && results[0] != null && results[0] != undefined){      
+                resolve(results[0]);
             } else reject("Cannot find config for server => "+sid+"\t"+new Date());
         });
     });
@@ -162,18 +191,16 @@ function getUser(by, sid){
         if(by.uid != null && by.uid != undefined){
             connection.query("SELECT * FROM `user` WHERE id = ? AND server = ?", [by.uid, sid],function(error, results, fields){
                 if (error) reject(null);
-                let result = results[0];
     
-                if(result != null && result != undefined){      
-                    resolve(result);
+                if(results != null && results != undefined && results[0] != null && results[0] != undefined){      
+                    resolve(results[0]);
                 } else reject(undefined);
             });
         } else if(by.uname != null && by.uname != undefined){
             connection.query("SELECT * FROM `user` WHERE name = ? AND server = ?", [by.uname, sid],function(error, results, fields){
                 if (error) reject(null);
-                let result = results[0];
     
-                if(result != null && result != undefined){      
+                if(results != null && results != undefined && results[0] != null && results[0] != undefined){      
                     resolve(result);
                 } else reject(undefined);
             });
@@ -186,8 +213,13 @@ function getUser(by, sid){
 function addUser(uid, name, sid){
     let promise = new Promise((resolve, reject) =>{
         connection.query("INSERT INTO `user` VALUES (?, ?, DEFAULT, ?, ?)", [uid, name, sid, 1],function(error, results, fields){
-            if (error) resolve(error);
-            if(results.affectedRows > 0) resolve(true); else resolve(false);
+            if (error) reject(error);
+            if(results != null && results != undefined){
+                if(results.affectedRows > 0) 
+                    resolve(true); 
+                else reject(false);
+            } else reject(false);
+
         });
     });
 
@@ -205,7 +237,7 @@ function updatePlaytime(uid, sid){
     return promise;
 }
 function addActivity(name, type, device, uid, sid){
-        connection.query("INSERT INTO `activity` VALUES ('', ?, DEFAULT, ?, ?, ?, ?)", [name, type, JSON.stringify(device), sid, uid],function(error, results, fields){
+        connection.query("INSERT INTO `activity` VALUES (NULL, ?, DEFAULT, ?, ?, ?, ?)", [name, type, JSON.stringify(device), sid, uid],function(error, results, fields){
             if (error) console.error(error);
         });
 }
@@ -216,7 +248,7 @@ function writePlaytime(uid, sid, game, member){
         }).catch((e) => {console.error(e)});
     }).catch( (r) =>{ //This is returned either when we find no users (r = undefined), or when we have an error (r = null)
         if(r == undefined){ //We have no user, so we better add him to the database.
-            addUser(uid, member.user.username, member.joinedTimestamp, member.guild.id).then((r) => {
+            addUser(uid, member.user.username, member.guild.id).then((r) => {
                 if(r){
                     addActivity(game, member.presence.game.type, member.presence.clientStatus, uid, sid);
                 }
@@ -290,7 +322,11 @@ function watch(client){
     
                     }
                 });
-            }).catch((e) => {console.error(Date.now()+", SID: "+guild.id.toString()+" => "+e)});
+            }).catch((e) => {
+                    connection.query("INSERT INTO `settings` VALUES (NULL, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, ?)",[guild.id], function(error, results, fields){
+                        if(error) console.error("Error while creating settings for "+guild.id+" =>\n"+error);
+                    });
+                });
         })
     }, 60000); //1 min
 
@@ -421,7 +457,7 @@ function setupServer(guild){
     connection.query("INSERT INTO `server` VALUES (?, ?, DEFAULT, 0, ?)", [guild.id, guild.name, guild.ownerID], function(err, results, fields){
         if(err) console.error("Error while adding a new server: "+err);
         
-        if(results.affectedRows != null && results.affectedRows != undefined){
+        if(results != null && results != undefined && results.affectedRows != null && results.affectedRows != undefined){
             connection.query("INSERT INTO `config` VALUES ('', DEFAULT, DEFAULT, ?)",[guild.id], function(error, results, fields){
                 if(err) console.error("Error while creating config for "+guild.id+" =>\n"+err);
             });
@@ -435,7 +471,7 @@ client.on('ready', () => {
 
   scu = new Discord.ShardClientUtil(client);
 
-  console.log(`Logged in as ${client.user.tag}!`);
+  console.log(`Spawned ${client.user.tag}!`);
 //   Let's cache config files so we have quick access and the least amount of delay.
   client.guilds.tap(function e(guild, key, map){
     var id = guild.id.toString();
@@ -444,6 +480,9 @@ client.on('ready', () => {
         configs.set(config.server, {"prefix":config.prefix, "deleteAfterQuery":Boolean(Number(config.deleteAfterQuery))});
     }).catch(() => { //We didn't find this server in our database, so let's set it up.
         setupServer(guild);
+        connection.query("INSERT INTO `config` VALUES (NULL, DEFAULT, DEFAULT, ?)",[guild.id], function(error, results, fields){
+                if(error) console.error("Error while creating config for "+guild.id+" =>\n"+error);
+        });
     });
   });
 
@@ -687,6 +726,31 @@ client.on('message', message => {
                         .catch();
                 }
             }).catch((e) => console.error(Date.now()+" => "+e)); 
+        } else if(instruction[0] == "observer" && message.member.id == message.guild.ownerID){ //Only owners can change bot config for their server.
+            if(instruction[1] == "set"){
+                if(instruction[2] == "config"){
+                    if(instruction[3] == "prefix"){
+                        if(instruction[4] != null && instruction[4] != undefined && instruction[4].length == 1){
+                            updateConfig(message.guild.id, 'prefix', instruction[4]).then((r) => {
+                                message.author.send(successMessage("Updated config. You may use your settings now."));
+                            }).catch((e) => {
+                                console.error(e);
+                            });
+                        } else message.reply(errorMessage("Something is not right, please try again."));
+                    } else if(instruction[3] == "deleteafterquery"){
+                        if(instruction[4] != null && instruction[4] != undefined && instruction[4].length == 1){
+                            if(instruction[4] == 0 || instruction[4] == 1){
+                                updateConfig(message.guild.id, 'daq', instruction[4]).then((r) => {
+                                    message.author.send(successMessage("Updated config. You may use your settings now."));
+                                }).catch((e) => {
+                                    console.error(e);
+                                });
+                            } else message.author.send(errorMessage("You can only use 0 or 1 as a setting. 0 being false, 1 being true."));
+                        } else message.author.send(errorMessage("Something is not right, please try again."));
+                    }
+                }
+            }
+
         }
     }
 });
