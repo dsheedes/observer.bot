@@ -17,12 +17,122 @@ const client = new Discord.Client();
 let scu; //Shard Client Util, will define in ready section.
 
 let configs =  new Discord.Collection(); //Using Collection for convenience
+function compare(u1, u2, sid){
+    uid1 = u1.id;
+    uid2 = u2.id;
+    let promise = new Promise((resolve, reject) => {
+        getPlaytime({uid:uid1}, sid).then((results) => {
+            getPlaytime({uid:uid2}, sid).then((results2) => {
 
+                let embed = {
+                    "title": "Playtime comparison",
+                    "description": "Comparison between `"+u1.displayName+"` and `"+u2.displayName+"`\nConcluded with the date below.",
+                    "color": 1158129,
+                    "timestamp": new Date(),
+                    "thumbnail": {
+                      "url": "https://cdn2.iconfinder.com/data/icons/circle-icons-1/64/trends-512.png"
+                    },
+                    "fields": [
+                        {
+                            "name":u1.displayName,
+                            "value":"Total playtime: 0 hours",
+                            "inline":true
+                        },
+                        {
+                            "name":u2.displayName,
+                            "value":"Total playtime: 0 hours",
+                            "inline":true
+                        },
+                        {
+                            "name":'\u200b',
+                            "value":'\u200b'
+                        }
+                    ]
+                }
+                //We now have both results, let's match what's the same and put it in an embed file.
+               for(let i = 0; i < results.length; i++){
+                   for(let p = 0; p < results2.length; p++){
+                        if(results[i].name == results2[p].name){
+                            rp = results[i].playtime/60;
+                            embed.fields.push({"name":results[i].name, "value":rp.toFixed(2)+" hours.", "inline":true});
+                            r2p = results2[p].playtime/60;
+                            embed.fields.push({"name":results2[p].name, "value":r2p.toFixed(2)+" hours.", "inline":true});
+
+                            embed.fields.push({"name":'\u200b', "value":'\u200b'});
+                        }
+                        if(i == results.length - 1){
+                            resolve({embed});
+                        }
+
+                   }
+               }
+
+            });
+        }).catch((error) => {
+            reject(error);
+        });
+    });
+
+    return promise;
+}
+function sendMessage(message, response, private){
+    let promise = new Promise((resolve, reject) => {
+        let config = configs.get(message.member.guild.id); //Get the config file for the server
+        if(private){ //If the message is private
+            message.author.send(response);
+            resolve(true);
+        } else if(config != null && config != undefined){ //If the config file is not empty
+                    if(config.defaultChannel != null){ //If there is a set default channel
+                        if(message.member.guild.channels.has(config.defaultChannel)){ //If the default channel exists at this time
+                            message.member.guild.channels.get(config.defaultChannel).send(response).catch((e) => console.error(e));
+                            resolve(true);
+                        } else { //The defaultchannel is set to a nonexistent channel.
+                            message.reply(response); // Send a response to current channel
+                            //Now let's revert the setting to have no default channels
+                            updateConfig(message.guild.id, "dc", null).then((r) => {
+                                if(r){
+                                    //We've updated the config, now let's notify the server owner
+                                    message.guild.owner.user.send(errorMessage("Bot's default channel is not in the channel list anymore.\nI've reverted back to no default channel.\nYou should change this setting once you reconfigure your Discord server."));
+                                    resolve(true);
+                                }
+                            })
+                        }
+                    } else {
+                        message.reply(response);
+                        resolve(true);
+                    }
+                } else { //Config file does not exist. We must update.
+
+                    getServerConfig(id).then((config) => {
+                        configs.set(config.server, {"prefix":config.prefix, "deleteAfterQuery":Boolean(Number(config.deleteAfterQuery)), "defaultChannel":config.defaultChannel});
+                        //Let's try servicing our message again.
+                        sendMessage(message, response, private);
+                        resolve(true);
+
+                    }).catch(() => { //We didn't find this server in our database, so let's set it up.
+                        setupServer(guild);
+                        connection.query("INSERT INTO `config` VALUES (NULL, DEFAULT, DEFAULT, DEFAULT, ?)",[guild.id], function(error, results, fields){
+                                if(error) {
+                                    console.error("Error while creating config for "+guild.id+" =>\n"+error)
+                                    reject(false);
+                                }
+                                //Let's try again once we have a server in our db
+                                sendMessage(message, response, private);
+                                resolve(true);
+                        });
+                    });
+
+                }
+
+    });
+
+    return promise;
+}
 function updateConfig(sid, setting, value){
 
     let promise = new Promise((resolve, reject) => {
         if(setting == 'prefix'){
-            configs.set(sid, {"prefix": value, "deleteAfterQuery":configs.get(sid).deleteAfterQuery}); //Updating cached configs
+            configs.set(sid, {"prefix": value, "deleteAfterQuery":configs.get(sid).deleteAfterQuery, "defaultChannel":configs.get(sid).defaultChannel}); //Updating cached configs
             connection.query("UPDATE `config` SET prefix = ? WHERE server = ?", [value, sid], function(error, results, fields){
                 if(error) reject(error);
                 
@@ -31,8 +141,17 @@ function updateConfig(sid, setting, value){
                 else resolve(false);
              });
         } else if(setting == "daq"){
-            configs.set(sid, {"prefix": configs.get(sid).prefix, "deleteAfterQuery":value});
-            connection.query("UPDATE `config` SET prefix = ? WHERE server = ?", [value, sid], function(error, results, fields){
+            configs.set(sid, {"prefix": configs.get(sid).prefix, "deleteAfterQuery":value, "defaultChannel":configs.get(sid).defaultChannel});
+            connection.query("UPDATE `config` SET deleteAfterQuery = ? WHERE server = ?", [value, sid], function(error, results, fields){
+                if(error) reject(error);
+                
+                if(results.affectedRows > 0)
+                    resolve(true);
+                else resolve(false);
+             });
+        }else if(setting == "dc"){
+            configs.set(sid, {"prefix": configs.get(sid).prefix, "deleteAfterQuery":configs.get(sid).deleteAfterQuery, "defaultChannel":value});
+            connection.query("UPDATE `config` SET defaultChannel = ? WHERE server = ?", [value, sid], function(error, results, fields){
                 if(error) reject(error);
                 
                 if(results.affectedRows > 0)
@@ -51,7 +170,11 @@ function matchMember(guild, value){
     let promise = new Promise((resolve, reject) => {
         guild.members.tap(member => {
             if(!member.user.bot){
-                if(member.user.username.toLowerCase() == value){
+                if(typeof value == "object"){
+                    if(member.user.id == value.user.id){
+                        resolve(member);
+                    }
+                } else if(member.user.username.toLowerCase() == value){
                     resolve(member);
                 } else if(member.nickname != undefined || member.nickname != null){
                     if(member.nickname.toLowerCase() == value){
@@ -75,9 +198,9 @@ function getPlaytime(by, sid){
                 if(results != null || results != undefined){
                     if(results.length > 0){
                         resolve(results);
-                    }
-                }
-                resolve(null);
+                    } else resolve(null);
+                } resolve(null);
+
             });
         } else if(by.uname != null && by.uname != undefined){
             getUser({uname:by.uname}, sid).then((uid) => {
@@ -86,13 +209,13 @@ function getPlaytime(by, sid){
                     if(results != null || results != undefined){
                         if(results.length > 0){
                             resolve(results);
-                        }
-                    }
+                        } else resolve(null);
+                    }else resolve(null);
     
-                    resolve(null);
+
                 });
             }).catch(() => {
-                resolve(null);
+                reject(null);
             });
 
 
@@ -242,7 +365,7 @@ function addActivity(name, type, device, uid, sid){
         });
 }
 function writePlaytime(uid, sid, game, member){
-    getUser({uid:uid}, sid).then( (u) => { //It only returns a resolve when we get a match, so this is always positive
+    getUser({uid:uid}, sid).then( () => { //It only returns a resolve when we get a match, so this is always positive
         updatePlaytime(uid, sid).then( (r) => {
             if(r) addActivity(game, member.presence.game.type, member.presence.clientStatus, uid, sid);
         }).catch((e) => {console.error(e)});
@@ -333,36 +456,45 @@ function watch(client){
 
 }
 function returnPlaytime(list, author, sid){
-    let embed = {
-        "title": "Total playtime:",
-        "description": "All time statistics for user "+author+" concluded with the date below.",
-        "color": 1158129,
-        "timestamp": new Date(),
-        "thumbnail": {
-          "url": "https://cdn2.iconfinder.com/data/icons/circle-icons-1/64/trends-512.png"
-        },
-        "fields": [
-        ]
+    let embed;
+    if(list != null || list != undefined){
+        embed = {
+            "title": "Total playtime:",
+            "description": "All time statistics for user "+author+" concluded with the date below.",
+            "color": 1158129,
+            "timestamp": new Date(),
+            "thumbnail": {
+              "url": "https://cdn2.iconfinder.com/data/icons/circle-icons-1/64/trends-512.png"
+            },
+            "fields": [
+            ]
+        }
+    
+        for(i = 0; i < list.length; i++){
+            let t = list[i].playtime/60
+            embed.fields.push({"name":"**"+list[i].name+"**", "value":t.toFixed(2)+" hours."});
+        }
+    } else {
+        embed = errorMessage("No playtime detected.\nCheck back in a minute, and make sure your activity is visible.");
     }
 
-    for(i = 0; i < list.length; i++){
-        let t = list[i].playtime/60
-        embed.fields.push({"name":list[i].name, "value":t.toFixed(2)+" hours."});
-    }
 
     let promise = new Promise((resolve, reject) => {
         getUser({uid:author.id}, sid).then((user) => {
-            let t = user.playtime/60;
-            embed.fields.push({"name":"Total playtime", "value":t.toFixed(2)+" hours."});
-            resolve({embed});
+            if(list != null && list != undefined){
+                let t = user.playtime/60;
+                embed.fields.push({"name":"Total playtime", "value":t.toFixed(2)+" hours."});
+                resolve({embed});
+            } else resolve(embed)
+ 
         }).catch(() => {
-            reject({embed});
+            reject(embed);
         });
     })
     
     return promise;
 }
-function documentation(prefix, author){
+function documentation(prefix){
 
     const embed = {
         "title": "Documentation",
@@ -388,7 +520,7 @@ function documentation(prefix, author){
         ]
       };
 
-      author.send({embed});
+      return {embed};
     
 }
 function successMessage(message){
@@ -442,12 +574,12 @@ function top(top, flagText){
         for(i = 0; i < top.length; i++){
             let pt = top[i].playtime/60;
             if(i == 0){
-                embed.fields.push({"name":"🥇. "+top[i].name, "value":pt.toFixed(2)+" hours."});
+                embed.fields.push({"name":"🥇. **"+top[i].name+"**", "value":pt.toFixed(2)+" hours."});
             } else if(i == 1){
-                embed.fields.push({"name":"🥈. "+top[i].name, "value":pt.toFixed(2)+" hours."});
+                embed.fields.push({"name":"🥈. **"+top[i].name+"**", "value":pt.toFixed(2)+" hours."});
             } else if(i == 2){
-                embed.fields.push({"name":"🥉. "+top[i].name, "value":pt.toFixed(2)+" hours."});
-            } else embed.fields.push({"name":i+1+". "+top[i].name, "value":pt.toFixed(2)+" hours."});
+                embed.fields.push({"name":"🥉. **"+top[i].name+"**", "value":pt.toFixed(2)+" hours."});
+            } else embed.fields.push({"name":i+1+". **"+top[i].name+"**", "value":pt.toFixed(2)+" hours."});
         }
     } else embed.fields.push({"name":"No results.", "value":"Tough luck. Maybe try with a different query?"});
 
@@ -477,10 +609,10 @@ client.on('ready', () => {
     var id = guild.id.toString();
 
     getServerConfig(id).then((config) => {
-        configs.set(config.server, {"prefix":config.prefix, "deleteAfterQuery":Boolean(Number(config.deleteAfterQuery))});
+        configs.set(config.server, {"prefix":config.prefix, "deleteAfterQuery":Boolean(Number(config.deleteAfterQuery)), "defaultChannel":config.defaultChannel});
     }).catch(() => { //We didn't find this server in our database, so let's set it up.
         setupServer(guild);
-        connection.query("INSERT INTO `config` VALUES (NULL, DEFAULT, DEFAULT, ?)",[guild.id], function(error, results, fields){
+        connection.query("INSERT INTO `config` VALUES (NULL, DEFAULT, DEFAULT, DEFAULT, ?)",[guild.id], function(error, results, fields){
                 if(error) console.error("Error while creating config for "+guild.id+" =>\n"+error);
         });
     });
@@ -522,11 +654,11 @@ client.on('message', message => {
         if(instruction[0][0] == SETTINGS_PREFIX){
             getServerSettings(message.guild.id).then((settings) => {
                 if(instruction[0] == SETTINGS_PREFIX+"doc" || instruction[0] == SETTINGS_PREFIX+"documentation" || instruction[0] == SETTINGS_PREFIX+"help" || instruction[0] == SETTINGS_PREFIX+"man" ||  instruction[0] == SETTINGS_PREFIX+"manual"){
-                    documentation(SETTINGS_PREFIX, message.author);
+                    sendMessage(message, documentation(SETTINGS_PREFIX), true);
                 } else if(instruction[0] == SETTINGS_PREFIX+"settings"){
         
                     if(message.guild == null){
-                        message.author.send(errorMessage("Please use this instruction from the server chat."));
+                        sendMessage(message, errorMessage("Please use this instruction from the server chat."), true);
                         return;
                     }
                     if(message.member.roles.find(val => val.name.toLowerCase() === settings.arole) != undefined || message.member.roles.find(val => val.name.toLowerCase() === settings.mrole) != undefined || message.member.id == message.guild.ownerID){
@@ -543,7 +675,7 @@ client.on('message', message => {
             
                                 if(instruction[2] == "all" || instruction[2] == "web" || instruction[2] == "mobile" || instruction[2] == "desktop"){
                                     settings.monitoredDevice = instruction[2];
-                                } else message.author.send(errorMessage("Cannot update monitored device. Allowed input: All, Web, Mobile, Desktop"));
+                                } else sendMessage(message, errorMessage("Cannot update monitored device. Allowed input: All, Web, Mobile, Desktop"), true);
             
                             }
                             
@@ -587,11 +719,11 @@ client.on('message', message => {
                             }
     
                         }else {
-                            message.author.send(errorMessage("Unknown function. Please try again."));
+                            sendMessage(message, errorMessage("Unknown function. Please try again."), true);
                         }
             
                         setServerSettings(message.guild.id, settings, message);
-                    } else message.author.send(errorMessage("Insufficient permissions."));
+                    } else sendMessage(message, errorMessage("Insufficient permissions."), true);
                 } else if(instruction[0] == SETTINGS_PREFIX+"playtime" || instruction[0] == SETTINGS_PREFIX+"p"){
                     if(instruction[1] != null && instruction[1] != undefined){
                         //We're getting a username, let's look for it in the guild.
@@ -600,29 +732,46 @@ client.on('message', message => {
                             //Let's see if the user requesting a search is one of the admins/mods
                             if(message.member.roles.find(val => val.name.toLowerCase() === settings.arole) != undefined || message.member.roles.find(val => val.name.toLowerCase() === settings.mrole) != undefined || message.member.id == message.guild.ownerID){
                                 granted = true;
-                            } else message.reply(errorMessage("Insufficient permissions."));
+                            } else sendMessage(message, errorMessage("Insufficient permissions."), false);
                         } else granted = true;
     
                         if(granted){
-                            matchMember(message.guild, instruction[1].toLowerCase()).then((member) => {
-                                getPlaytime({uid:member.id}, message.guild.id.toString()).then((result) => {
-                                    returnPlaytime(result, member.user, message.guild.id.toString()).then((r) => {
-                                        message.reply(r);
-                                        return;
-                                    }).catch(() => {
-                                        message.reply(errorMessage("Well, something went wrong. Try again in a minute?"));
-                                    })
-                                }).catch(()=>{});
-                            }).catch(()=>{
-                                message.reply(errorMessage("Cannot find member `"+instruction[1]+"`."))
-                            });       
+                            if(message.mentions.members != null && message.mentions.members != undefined && message.mentions.members.size > 0){
+                                const iterator = message.mentions.members.values();
+                                matchMember(message.guild, iterator.next().value).then((member) => {
+                                    getPlaytime({uid:member.id}, message.guild.id.toString()).then((result) => {
+                                        returnPlaytime(result, member.user, message.guild.id.toString()).then((r) => {
+                                            sendMessage(message, r, false);
+                                            return;
+                                        }).catch((response) => {
+                                            sendMessage(message, response, false);
+                                        })
+                                    }).catch(()=>{});
+                                }).catch(()=>{
+                                    sendMessage(message, errorMessage("Cannot find member `"+instruction[1]+"`."), false);
+                                });      
+                            } else {
+                                matchMember(message.guild, instruction[1].toLowerCase()).then((member) => {
+                                    getPlaytime({uid:member.id}, message.guild.id.toString()).then((result) => {
+                                        returnPlaytime(result, member.user, message.guild.id.toString()).then((r) => {
+                                            sendMessage(message, r, false);
+                                            return;
+                                        }).catch((response) => {
+                                            sendMessage(message, response, false);
+                                        })
+                                    }).catch(()=>{});
+                                }).catch(()=>{
+                                    sendMessage(message, errorMessage("Cannot find member `"+instruction[1]+"`."), false);
+                                });      
+                            }
+                             
                         }
                     } else {
                         getPlaytime({uid:message.author.id}, message.guild.id.toString()).then((result) => {
                             returnPlaytime(result, message.author, message.guild.id.toString()).then((r) => {
-                                message.reply(r);
-                            }).catch(() => {
-                                message.reply(errorMessage("Well, something went wrong. Try again?"));
+                                sendMessage(message, r, false);
+                            }).catch((response) => {
+                                sendMessage(message, response, false);
                             })
                         }).catch(()=>{});
                     }
@@ -660,7 +809,7 @@ client.on('message', message => {
                         }
                     }
                     
-                    getTop(message.guild.id.toString(), limit).then((response) => message.reply(response)).catch((e) => console.log(e));
+                    getTop(message.guild.id.toString(), limit).then((response) => sendMessage(message, response, false)).catch((e) => console.log(e));
     
                 }else if(instruction[0] == SETTINGS_PREFIX+"topday" || instruction[0] == SETTINGS_PREFIX+"td"){
                     let limit = 10;
@@ -675,10 +824,10 @@ client.on('message', message => {
                     }
 
                     getTop(message.guild.id, limit, "td").then((r) => {
-                        message.reply(r)
+                        sendMessage(message, r, false);
                     }).catch((e) => {
                         if(e == null){
-                            message.reply(errorMessage("No results found."));
+                           sendMessage(message, errorMessage("No results found."), false);
                         }else console.error(new Date.now() + " => "+e);
                     });
                 } else if(instruction[0] == SETTINGS_PREFIX+"topweek" || instruction[0] == SETTINGS_PREFIX+"tw"){
@@ -694,15 +843,15 @@ client.on('message', message => {
                     }
 
                     getTop(message.guild.id, limit, "tw").then((r) => {
-                        message.reply(r)
+                        sendMessage(message, r, false)
                     }).catch((e) => {
                         if(e == null){
-                            message.reply(errorMessage("No results found."));
+                            sendMessage(message, errorMessage("No results found."), false);
                         }else console.error(new Date.now() + " => "+e);
                     });
                 } else if(instruction[0] == SETTINGS_PREFIX+"topmonth" || instruction[0] == SETTINGS_PREFIX+"tm"){
                     let limit = 10;
-                    if(instruction[1] == null && instruction[1] == undefined){
+                    if(instruction[1] == null || instruction[1] == undefined){
                         limit = 10;
                     } else {
                         if(!isNaN(parseInt(instruction[1]))){
@@ -713,12 +862,52 @@ client.on('message', message => {
                     }
 
                     getTop(message.guild.id, limit, "tm").then((r) => {
-                        message.reply(r)
+                        sendMessage(message, r, false);
                     }).catch((e) => {
                         if(e == null){
-                            message.reply(errorMessage("No results found."));
+                            sendMessage(message, errorMessage("No results found."), false);
                         }else console.error(new Date.now() + " => "+e);
                     });
+                } else if(instruction[0] == SETTINGS_PREFIX+"compare" || instruction[0] == SETTINGS_PREFIX+"c" || instruction[0] == SETTINGS_PREFIX+"cmp"){
+                    if(instruction[1] == null || instruction[1] == undefined) {
+                        sendMessage(message, errorMessage("You need to include parameters. See `"+SETTINGS_PREFIX+"help` for more information."), false);
+                    } else if(instruction[2] == null || instruction[2] == undefined){
+                        sendMessage(message, errorMessage("You need to include a second user. See `"+SETTINGS_PREFIX+"help` for more information."), false);
+                    } else {
+                        //We are in the clear!
+                        let u1, u2;
+                        if(message.mentions.members != null && message.mentions.members != undefined && message.mentions.members.size > 0){
+                            const iterator = message.mentions.members.values();
+                            matchMember(message.guild, iterator.next().value).then((result) => {
+                                u1 = result;
+                                matchMember(message.guild, iterator.next().value).then((result) => {
+                                    u2 = result;
+                                    compare(u1, u2, message.guild.id).then((response) => {
+                                        sendMessage(message, response, false);
+                                    }).catch((error) => {
+                                        sendMessage(message, errorMessage("Something bad happened. Try again?", false))
+                                    });
+                                }).catch((e) => {sendMessage(message, errorMessage("Something bad happened. Try again?", false))});
+                            }).catch((e) => {sendMessage(message, errorMessage("Something bad happened. Try again?", false))});
+                        } else {
+                        matchMember(message.guild, instruction[1]).then((result) => {
+                            u1 = result;
+                            matchMember(message.guild, instruction[2]).then((result) => {
+                                u2 = result;
+                                compare(u1, u2, message.guild.id).then((response) => {
+                                    sendMessage(message, response, false);
+                                }).catch((error) => {
+        
+                                });
+                            }).catch((e) => {console.log("error");});
+                        }).catch((e) => {console.log("error");});
+                        }
+                        
+
+                        
+                    }
+                } else if(instruction[0] == ",test"){
+                    console.log(instruction[1].id);
                 }
                 if(SETTINGS_DELETE_AFTER_QUERY && message.guild != null){
                     message.delete()
@@ -732,21 +921,31 @@ client.on('message', message => {
                     if(instruction[3] == "prefix"){
                         if(instruction[4] != null && instruction[4] != undefined && instruction[4].length == 1){
                             updateConfig(message.guild.id, 'prefix', instruction[4]).then((r) => {
-                                message.author.send(successMessage("Updated config. You may use your settings now."));
+                                sendMessage(message, successMessage("Updated config. You may use your settings now."), true);
                             }).catch((e) => {
                                 console.error(e);
                             });
-                        } else message.reply(errorMessage("Something is not right, please try again."));
+                        } else sendMessage(message, errorMessage("Something is not right, please try again."), false);
                     } else if(instruction[3] == "deleteafterquery"){
                         if(instruction[4] != null && instruction[4] != undefined && instruction[4].length == 1){
                             if(instruction[4] == 0 || instruction[4] == 1){
                                 updateConfig(message.guild.id, 'daq', instruction[4]).then((r) => {
-                                    message.author.send(successMessage("Updated config. You may use your settings now."));
+                                    sendMessage(message, successMessage("Updated config. You may use your settings now."), true);
                                 }).catch((e) => {
                                     console.error(e);
                                 });
-                            } else message.author.send(errorMessage("You can only use 0 or 1 as a setting. 0 being false, 1 being true."));
-                        } else message.author.send(errorMessage("Something is not right, please try again."));
+                            } else sendMessage(message, errorMessage("You can only use 0 or 1 as a setting. 0 being false, 1 being true."), true);
+                        } else sendMessage(message, errorMessage("Something is not right, please try again."), true);
+                    }else if(instruction[3] == "defaultchannel"){
+                        if(instruction[4] != null && instruction[4] != undefined){
+                            if(message.guild.channels.has(instruction[4])){
+                                updateConfig(message.guild.id, 'dc', instruction[4]).then((r) => {
+                                    sendMessage(message, successMessage("Updated config. You may use your settings now."), true);
+                                }).catch((e) => {
+                                    console.error(e);
+                                });
+                            } else sendMessage(message, errorMessage("That channel does not exist. Did you use a channel name instead of channel ID?"), true);
+                        } else sendMessage(message, errorMessage("Something is not right, please try again."), true);
                     }
                 }
             }
