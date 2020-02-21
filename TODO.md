@@ -8,6 +8,7 @@
 - [ ] If there are changes to server settings, update the cache
 - [ ] Separate the code into classes for easier modification (Going OOP)
 - [ ] Fix reported bugs
+- [ ] Update documentation
 
 ## Future ideas
 - [ ] Implement an experience system based on playtime
