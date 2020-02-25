@@ -17,6 +17,179 @@ const client = new Discord.Client();
 let scu; //Shard Client Util, will define in ready section.
 
 let configs =  new Discord.Collection(); //Using Collection for convenience
+let roles = new Discord.Collection();
+
+function loadServerFiles(guild){
+    let id = guild.id;
+    getServerConfig(id).then((config) => {
+        configs.set(config.server, {"prefix":config.prefix, "deleteAfterQuery":Boolean(Number(config.deleteAfterQuery)), "defaultChannel":config.defaultChannel});
+        getRole(id).then((role) => {
+            if(role != null){
+                
+                let tempRID = role.rid;
+                let tempRNAME = role.name;
+                let tempRXP = role.xp;
+
+                if(tempRID == null){
+                    tempRID = [];
+                } else tempRID = JSON.parse(role.rid);
+                if(tempRNAME == null){
+                    tempRNAME = [];
+                } else tempRNAME = JSON.parse(role.name);
+                if(tempRXP == null){
+                    tempRXP = [];
+                } else tempRXP = JSON.parse(role.xp);
+                roles.set(role.server, {"enabled":role.enabled, "rid":tempRID, "name":tempRNAME, "multiplier":role.multiplier,"xp":tempRXP});
+            }
+        }).catch((e) => console.error(e));
+    }).catch(() => { //We didn't find this server in our database, so let's set it up.
+        setupServer(guild);
+    });
+}
+function setRoleMultiplier(sid, value){
+    let promise = new Promise((resolve, reject) => {
+        let role = roles.get(sid);
+        role.multiplier = value;
+        roles.set(sid, role);
+        updateRoles(sid).catch((e) => {console.error("Error while updating roles.\n"+e)});
+        resolve(true);
+    })
+    
+    return promise;
+}
+function addXP(uid, sid, member){
+    let promise = new Promise((resolve, reject) => {
+        if(roles.get(sid).enabled == 1){
+            let xp = 1*roles.get(sid).multiplier;
+
+            connection.query("UPDATE user SET xp = xp+? WHERE id = ? AND server = ?", [xp, uid, sid], (error, results, fields) => {
+                if(error) reject(error);
+                if(results != null && results != undefined && results.affectedRows > 0){
+                    //Now we need to check if they are about to hit a new role
+                    connection.query("SELECT xp FROM user WHERE id = ? AND server = ?",[uid, sid], (error, results, fields) => {
+                        if(error) reject(error);
+                        if(results != null && results != undefined){
+                            let xp = parseInt(results[0]);
+                            //We need to check if the xp is enough to reach a role
+                            let xpLevels = roles.get(sid).xp
+                            for(let i = 0; i < xpLevels.length; i++){
+                                if(xpLevels[i] <= xp){
+                                    if(member.roles.get(roles.get(sid).id[i]) == undefined){
+                                        member.addRole(roles.get(sid).id[i]);
+                                        //Notify the member that they achieved a new role here
+                                        resolve(true);
+                                        return promise;
+                                    }
+                                }
+                            }
+                        }
+                    });
+                }
+            })
+        }
+    });
+    return promise;
+}
+function toggleRoles(sid){
+    let promise = new Promise((resolve, reject) => {
+        if(roles.get(sid) != undefined){
+            let temp = roles.get(sid);
+            let r = 0;
+            if(temp.enabled == 0){
+                temp.enabled = 1;
+                r = 1;
+            } else temp.enabled = 0;
+
+            roles.set(sid, temp);
+            updateRoles(sid).catch((e) => {console.error("Error while updating roles.\n"+e)});
+            resolve(r);
+        } else reject(false);
+    });
+
+    return promise;
+}
+function updateRoles(sid){
+    let promise = new Promise((resolve, reject) => {
+        let role = roles.get(sid);
+        connection.query("UPDATE role SET enabled = ?, rid = ?, name = ?, multiplier = ?, xp = ? WHERE server = ?", [role.enabled, JSON.stringify(role.rid), JSON.stringify(role.name), role.multiplier, JSON.stringify(role.xp), sid], (error, results, fields) => {
+            if(error) reject(error);
+            if(results.affectedRows > 0){
+                resolve(true);
+            } else resolve(false);
+        });
+    });
+
+    return promise;
+}
+function getRole(sid){
+    let promise = new Promise((resolve, reject) => {
+        connection.query("SELECT * FROM role WHERE server = ?", [sid], (error, results, fields) => {
+            if(error) reject(error);
+            if(results != null && results != undefined && results.length > 0){
+                resolve(results[0]);
+            } else resolve(null);
+        });
+    });
+    return promise;
+}
+function editRole(sid, role){
+    if(roles.get(sid) != undefined){
+        let temp = roles.get(sid);
+        let index = temp.indexOf(role.id);
+
+        if(index != -1){
+            temp.rid[index] = role.id;
+            temp.name[index] = role.name;
+            temp.xp[index] = role.xp;
+
+            roles.set(sid, temp);
+            updateRoles(sid).catch((e) => {console.error("Error while updating roles.\n"+e)});
+            return true;
+        } else return false;
+    } else return false;
+}
+function removeRole(sid, role){
+    if(roles.get(sid) != undefined){
+        let temp = roles.get(sid);
+        let index = temp.indexOf(role.id);
+        if(index != -1){
+            temp.rid.splice(index, 1);
+            temp.name.splice(index, 1);
+            temp.xp.splice(index, 1);
+
+            roles.set(sid, temp);
+            updateRoles(sid).catch((e) => {console.error("Error while updating roles.\n"+e)});
+            return true;
+        } else return false;
+    } else return false;
+}
+function addRole(sid, role){
+    let promise = new Promise((resolve, reject) => {
+        if(roles.get(sid) != undefined){
+                let temp = roles.get(sid);
+                if(!temp.rid.includes(role.rid)){
+                    temp.rid.push(role.rid);
+                    temp.name.push(role.name);
+                    temp.xp.push(role.xp);
+
+                    roles.set(sid, temp);
+                    updateRoles(sid).catch((e) => {console.error("Error while updating roles.\n"+e)});
+                    return resolve(true);
+                } else return resolve(false);
+            } else return resolve(false);
+    })
+    return promise;
+}
+function matchRole(guild, name){
+    let promise = new Promise((resolve, reject) => {
+        console.log(role.name, name);
+        let role = guild.roles.find((role) => role.name.toLowerCase() == name.toLowerCase())
+        if(role != undefined){
+            resolve(role);
+        } else reject(false);
+    });
+    return promise;
+}
 function compare(u1, u2, sid){
     uid1 = u1.id;
     uid2 = u2.id;
@@ -50,6 +223,13 @@ function compare(u1, u2, sid){
                     ]
                 }
                 //We now have both results, let's match what's the same and put it in an embed file.
+                if(results == null || results == undefined){
+                    resolve(errorMessage("User `"+u1.displayName+"` does not have any playtime recorded."));
+                    return promise;
+                } else if(results2 == null || results2 == undefined){
+                    resolve(errorMessage("User `"+u2.displayName+"` does not have any playtime recorded."));
+                    return promise;
+                }
                for(let i = 0; i < results.length; i++){
                    for(let p = 0; p < results2.length; p++){
                         if(results[i].name == results2[p].name){
@@ -335,7 +515,7 @@ function getUser(by, sid){
 }
 function addUser(uid, name, sid){
     let promise = new Promise((resolve, reject) =>{
-        connection.query("INSERT INTO `user` VALUES (?, ?, DEFAULT, ?, ?)", [uid, name, sid, 1],function(error, results, fields){
+        connection.query("INSERT INTO `user` VALUES (?, ?, DEFAULT, ?, ?, DEFAULT)", [uid, name, sid, 1],function(error, results, fields){
             if (error) reject(error);
             if(results != null && results != undefined){
                 if(results.affectedRows > 0) 
@@ -367,13 +547,32 @@ function addActivity(name, type, device, uid, sid){
 function writePlaytime(uid, sid, game, member){
     getUser({uid:uid}, sid).then( () => { //It only returns a resolve when we get a match, so this is always positive
         updatePlaytime(uid, sid).then( (r) => {
-            if(r) addActivity(game, member.presence.game.type, member.presence.clientStatus, uid, sid);
+            if(r) {
+                if(roles.get(sid).enabled == 1){
+                    addXP(uid, sid, member).then((r) => {
+                        if(!r){
+                            console.warn("Something went wrong while adding xp for a user."+member.displayName);
+                        }
+                    }).catch((e) => {
+                        console.error("Something went wrong while adding user xp:\n"+e);
+                    });
+                }
+                addActivity(game, member.presence.game.type, member.presence.clientStatus, uid, sid);
+
+            }
         }).catch((e) => {console.error(e)});
     }).catch( (r) =>{ //This is returned either when we find no users (r = undefined), or when we have an error (r = null)
         if(r == undefined){ //We have no user, so we better add him to the database.
             addUser(uid, member.user.username, member.guild.id).then((r) => {
                 if(r){
                     addActivity(game, member.presence.game.type, member.presence.clientStatus, uid, sid);
+                    addXP(uid, sid, member).then((r) => {
+                        if(!r){
+                            console.warn("Something went wrong while adding xp for a user.");
+                        }
+                    }).catch((e) => {
+                        console.error("Something went wrong while adding user xp:\n"+e);
+                    });
                 }
             }).catch((e) => {console.error(e)});
         } else { //We have an error, so we can just console err it.
@@ -596,9 +795,42 @@ function setupServer(guild){
             connection.query("INSERT INTO `settings` VALUES ('', DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, DEFAULT, ?)",[guild.id], function(error, results, fields){
                 if(err) console.error("Error while creating settings for "+guild.id+" =>\n"+err);
             });
+            connection.query("INSERT INTO `role` VALUES (NULL, DEFAULT, ?, DEFAULT, DEFAULT, DEFAULT, DEFAULT)", [guild.id], (error, results, fields) => {
+            if(error) console.error("Error while creating roles for "+guild.id+" V\n"+error);
+        });
         }
     });
 }
+client.on('roleDelete', (role) => { //Whenever a role gets deleted we need to check if we can remove a parameter from our database
+    if(roles.get(role.guild.id) != undefined){
+        let guildRoles = roles.get(role.guild.id);
+        let index = guildRoles.id.indexOf(role.id);
+        if(index != -1){ //If it exists in our roles list
+            guildRoles.rid.splice(index, 1);
+            guildRoles.name.splice(index, 1);
+            guildRoles.xp.splice(index, 1);
+
+            roles.set(role.guild.id, guildRoles);
+            updateRoles(role.guild.id);
+            return;
+        } else return;
+    } else return;
+});
+client.on('roleUpdate', (role) =>{ //Whenever a role updates we need to check if the changes can be applied to our database aswell
+    if(roles.get(role.guild.id) != undefined){
+        let guildRoles = roles.get(role.guild.id);
+        let index = guildRoles.id.indexOf(role.id);
+        if(index != -1){ //If it exists in our roles list
+
+            guildRoles.name = role.name;
+
+            roles.set(role.guild.id, guildRoles);
+            updateRoles(role.guild.id);
+
+            return;
+        } else return;
+    } else return;
+});
 client.on('ready', () => {
 
   scu = new Discord.ShardClientUtil(client);
@@ -606,16 +838,7 @@ client.on('ready', () => {
   console.log(`Spawned ${client.user.tag}!`);
 //   Let's cache config files so we have quick access and the least amount of delay.
   client.guilds.tap(function e(guild, key, map){
-    var id = guild.id.toString();
-
-    getServerConfig(id).then((config) => {
-        configs.set(config.server, {"prefix":config.prefix, "deleteAfterQuery":Boolean(Number(config.deleteAfterQuery)), "defaultChannel":config.defaultChannel});
-    }).catch(() => { //We didn't find this server in our database, so let's set it up.
-        setupServer(guild);
-        connection.query("INSERT INTO `config` VALUES (NULL, DEFAULT, DEFAULT, DEFAULT, ?)",[guild.id], function(error, results, fields){
-                if(error) console.error("Error while creating config for "+guild.id+" =>\n"+error);
-        });
-    });
+    loadServerFiles(guild);
   });
 
   //Let's set a presence, and let everyone know what's up
@@ -718,8 +941,9 @@ client.on('message', message => {
                                 }
                             }
     
-                        }else {
+                        } else {
                             sendMessage(message, errorMessage("Unknown function. Please try again."), true);
+                            return;
                         }
             
                         setServerSettings(message.guild.id, settings, message);
@@ -899,16 +1123,88 @@ client.on('message', message => {
                                 }).catch((error) => {
         
                                 });
-                            }).catch((e) => {console.log("error");});
-                        }).catch((e) => {console.log("error");});
+                            }).catch((e) => {console.error("error");});
+                        }).catch((e) => {console.error("error");});
                         }
                         
 
                         
                     }
-                } else if(instruction[0] == ",test"){
-                    console.log(instruction[1].id);
-                }
+                } else if(instruction[0] == SETTINGS_PREFIX+"roles"){
+                            if(instruction[1] == "add"){
+                                if(instruction[2] != null && instruction[2] != undefined){
+                                    if(instruction[3] != null && instruction[3] != undefined && !isNaN(instruction[3])){
+                                        matchRole(message.guild, instruction[2]).then((role) => {
+                                            addRole(message.guild.id, {"rid":role.id, "name":role.name, "xp":instruction[3]}).then((r) => {
+                                                if(r){
+                                                    sendMessage(message, successMessage("Successfully added role "+role.name+", "+instruction[3]+"xp"), true);
+                                                    return;
+                                                } else {
+                                                    sendMessage(message, errorMessage("Role already exists or something else went wrong."), true);
+                                                    return;
+                                                }
+                                            });
+                                        }).catch(() => {sendMessage(message, errorMessage("Could not find role `"+instruction[2]+"`. Please create the role first, and then use the add command."), true)});
+                                    } else sendMessage(message, errorMessage("You did not input a valid value for XP"), true);
+                                } else sendMessage(message, errorMessage("You did not input a valid role name."), true);
+                            } else if(instruction[1] == "remove"){
+                                if(instruction[2] != null && instruction[2] != undefined){
+                                    matchRole(message.guild, instruction[2]).then((role) => {
+                                        for(let i = 0; i < settings.roles.length; i++){
+                                            if(settings.roles[i].id == role.id){
+                                                removeRole(message.guild.id).then((response) => {
+                                                    if(response){
+                                                        sendMessage(message, successMessage("Sucessfully removed role "+role.name), true);
+                                                        return;
+                                                    } else {sendMessage(message, errorMessage("Could not remove role "+instruction[2]), true);return;}
+                                                }).catch((e) => {console.error("Someting happened while trying to remove a role\n"+e)});
+                                                
+                                            }
+                                        }
+                                    }).catch(() => {
+                                        sendMessage(message, errorMessage("Could not find role "+instruction[2]), true);
+                                        return;
+                                    });
+                                } else sendMessage(message, errorMessage("You did not input a valid role name."), true);
+                            } else if(instruction[1] == "edit"){
+                                if(instruction[2] != null && instruction[2] != undefined){
+                                    if(instruction[3] != null && instruction[3] != undefined && !isNaN(instruction[3])){
+                                        matchRole(message.guild, instruction[2]).then((role) => {
+                                            if(editRole(sid, {"rid":role.id, "name":role.name, "xp":instruction[3]})){
+                                                sendMessage(message, successMessage("Successfully edited role "+role.name, true));
+                                            } else sendMessage(message, errorMessage("Role does not exist or something else happened."), true);
+                                        }).catch(() => {
+                                            sendMessage(message, successMessage("Could not find role "+instruction[2]), true);
+                                        })
+                                    } else sendMessage(message, errorMessage("You did not enter a valid XP value."), true);
+                                }  else sendMessage(message, errorMessage("You did not enter a valid role name."), true);
+                            } else if(instruction[1] == "multiplier"){
+                                if(instruction[2] != null && instruction[2] != undefined && !isNaN(instruction[2])){
+                                    let value = parseFloat(instruction[2]);
+                                    value = parseFloat(value.toFixed(3));
+
+                                    if(value > 0 && value <= 100){
+                                        setRoleMultiplier(message.guild.id, value).then((response) => {
+                                            if(response){
+                                                sendMessage(message, successMessage("Successfully set the multiplier value to "+value.toString()), true);
+                                            } else sendMessage(message, errorMessage("Could not set role multiplier value."), true);
+                                        }).catch((e) => {console.error("Could not set role multiplier value:\n"+e)});
+                                    } else sendMessage(message, errorMessage("Multiplier can be a float value from 0,001 to 100"), true);
+                                }
+                            } else if(instruction[1] == "enable"){
+                                toggleRoles(message.guild.id).then((response) => {
+                                    if(response == 1){
+                                        sendMessage(message, successMessage("Enabled role assignment."), true);
+                                        return;
+                                    } else{
+                                        sendMessage(message, successMessage("Disabled role assignment."), true);
+                                        return
+                                    }
+                                }).catch((e) =>{});
+                            }
+                            }else if(instruction[0] == ",test"){
+                                console.log(instruction[1].id);
+                            }
                 if(SETTINGS_DELETE_AFTER_QUERY && message.guild != null){
                     message.delete()
                         .then()
