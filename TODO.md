@@ -6,8 +6,9 @@
 - [x] Implement the ability for server owners to change server config files
 - [ ] If there are changes to server settings, update the cache
 - [ ] Update documentation, including documentaion for roles and xp
-- [ ] Implement an experience system based on playtime
-- [ ] Implement a role assigment system based on experience
+- [x] Implement an experience system based on playtime
+- [x] Implement a role assigment system based on experience
+- [ ] Fully test the role system
 
 ## Future ideas
 - [ ] Separate the code into classes for easier modification (Going OOP)
