@@ -63,6 +63,7 @@ Possible options:
 |-a|Activity name|
 |-p|Presence type|
 |~~-d~~|~~Device type~~|
+
 *Flags should be followed by an option:*
     `,top <limit> <flag> <option>`
 
