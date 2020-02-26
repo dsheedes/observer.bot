@@ -272,7 +272,9 @@ function sendMessage(message, response, private){
         } else config = configs.get(message.guild.id);
 
         if(private){ //If the message is private
-            message.author.send(response);
+            message.author.send(response).catch((e) => {
+                console.log(e);
+            });
             resolve(true);
         } else if(config != null && config != undefined){ //If the config file is not empty
                     if(config.defaultChannel != null){ //If there is a set default channel
@@ -504,7 +506,10 @@ function getServerSettings(sid){
 function setServerSettings(sid, settings, message){
     connection.query("UPDATE `settings` SET arole = ?, mrole = ?, monitoredDevice = ?, monitoredType = ?, allowPlaytimeSearch = ?, monitoredStatus = ?, monitoredGames = ? WHERE server = ?", [settings.arole, settings.mrole, settings.monitoredDevice, settings.monitoredType, settings.allowPlaytimeSearch, JSON.stringify(settings.monitoredStatus), JSON.stringify(settings.monitoredGames), sid], function(error, results, fields){
         if(error) console.error(new Date.now()+" => Problem while updating settings for SID: "+sid);
-        message.author.send(successMessage("Updated server settings for server "+message.guild));
+        if(results != null && results != undefined && results.affectedRows > 0){
+            sendMessage(message, successMessage("Updated server settings for server "+message.guild), true).catch((e) => console.log(e) );
+        } else sendMessage(message, errorMessage("Error while updating server settings. Please try again."), true).catch((e) => console.log(e) );
+
     });
 }
 function getServerConfig(sid){
@@ -574,6 +579,9 @@ function updatePlaytime(uid, sid){
 function addActivity(name, type, device, uid, sid){
         connection.query("INSERT INTO `activity` VALUES (NULL, ?, DEFAULT, ?, ?, ?, ?)", [name, type, JSON.stringify(device), sid, uid],function(error, results, fields){
             if (error) console.error(error);
+        });
+        connection.query("UPDATE `server` SET playtime = playtime+1 WHERE id = ?", [sid], (error, results, fields) => {
+            if(error) console.error(error);
         });
 }
 function writePlaytime(uid, sid, game, member){
@@ -725,10 +733,14 @@ function returnPlaytime(list, author, sid){
     
     return promise;
 }
-function documentation(prefix){
+function documentation(prefix, administrator){
 
+    let user = "`"+prefix+"<playtime|p >   <display name>`\nShows current playtime statistics for user or for self if left empty.\n\n`"+prefix+"<top | t>	<limit> <flags*>`\nShows all time top playtimes limited by limit and filtered by flags*\n\n`"+prefix+"<topday | td> <limit(1 - 100)>`\nShows top playtimes for the previous day, limited by limit option.\n\n`"+prefix+"<topweek | tw> <limit(1 - 100)>`\nSame as previous, except it shows previous week.\n\n`"+prefix+"<topmonth/tm>	<limit(1 - 100)>`\nSame as previous, except it shows previous month.\n\n`"+prefix+"<roles> </>`\nShows information about the role system.";
+    let config = "`observer set config <field> <value>`\n\n**Showing options for field and value:**\n\n`prefix value`\nChanges the prefix value. Default `,`\n\n`deleteAfterQuery	<0 | 1>`\nIf the bot should delete a user message after a query.\n\n`defaultChannel	ChannelID`\nIf a bot should send messages to a specific channel\n\n*prefix value should be a single character value that is not used by any other bot or discord, default is* `,`";
+    let roles = "`"+prefix+"roles <command> <option(s)>`\n\n**Showing options for command and options(s):\n\n`add	<role name> <xp>`\nAdds a role based on role name and xp value that needs to be reached to gain the role.\n\n`remove <role name>`\nRemoves a role, if it was previously added, from the role system list\n\n`edit <role name> <xp>`\nChanges the xp value for a role\n\n`multiplier	<decimal(0.001 - 100.000)>`\nChanges the multiplier for playtimes*\n\n`toggle </>`\nEnables or disables the role system. Default is disabled.\n\n*xp uses a simple formula where xp = playtime x multiplier*";
+    let settings = "`"+prefix+"settings <setting> <value>`\n\n**Showing options for setting and value:**\n\n`arole <string*>`\nSets an administrator role\n\n`mrole <string*>`\nSets a moderator role\n\n`monitoredType	<0 - 3*>`\nSelect which presence types to monitor. Default is 0.\n\n`monitoredGames <string*>`\nSelect which games(activity) to monitor. Default is all.\n\n`monitoredStatus	<all | (online,idle,dnd)>`\nChoose which users to monitor based on their status. Default is all.\n\n`allowPlaytimeSearch <0 | 1>`\nChoose whether users can see other users' playtimes. Default is 1.\n\n*arole and mrole string values are names of administrator and moderator roles, respectively*\n*Monitored presence type values are as follows:*0. Playing\n1. Streaming\n2. Listening\n3. Watching";
     const embed = {
-        "title": "Documentation",
+        "title": "OBSERVER.bot Functionality documentation",
         "description": "Hopefully it's gonna be easier after reading this.",
         "color": 1158129,
         "timestamp": new Date(),
@@ -737,19 +749,17 @@ function documentation(prefix){
         },
         "fields": [
             {
-                "name":"Prefix",
+                "name":"__**Prefix**__",
                 "value":"The current prefix is `"+prefix+"` "
-            },
-            {
-            "name": "Settings - *This is reserved for privileged users* ",
-            "value": "`settings <instruction> <parameters>`\n\n**Types of instructions**\n`arole <name of role>` - The name of your administrator role.\n\n`mrole <name of role>` - The name of your moderator role\n\n`monitoredDevice <all/mobile/web/desktop>` - The type of device that will be monitored\n\n`monitoredType <any/playing/listening/watching/streaming>` - Type of activity\n\n`monitoredGames <string>` - Name of monitored activity, can be multiple - separated by `;`"
-            },
-            {
-            "name": "Main bot functions",
-            "value": "`playtime <username/nickname>` - Get playtime statistics. If parameter is left empty returns personal statistics. Displaying other user statistics can be restricted in settings.\n\n`top <limit>` - returns members who played the most. If no limit is inserted returns top 10. Maximum limit is 100.\n\n`topday <limit>` - similar to previous, returns top for the previous day.\n\n`topweek <limit>` - similar to previous, returns top for the previous week.\n\n`topmonth <limit>` - similar to previous, returns top for the previous month."
             }
         ]
       };
+      if(administrator){
+        embed.fields.push({"name":"__**Bot configuration settings.**__","value":config});
+        embed.fields.push({"name":"__**Bot functionality settings.**__", "value":settings});
+        embed.fields.push({"name":"__**Bot role assignment system.**__", "value":roles});
+        embed.fields.push({"name":"__**Bot functionality.**__", "value":user});
+    } else embed.fields.push({"name":"__**Bot functionality.**__", "value":user});
 
       return {embed};
     
@@ -920,18 +930,19 @@ client.on('message', message => {
                 SETTINGS_PREFIX = config.prefix;
                 SETTINGS_DELETE_AFTER_QUERY = config.deleteAfterQuery;
             }
+        } else {
+            message.author.send(errorMessage("Please use instructions from the server chat."));
+            return;
         }
     
         if(instruction[0][0] == SETTINGS_PREFIX){
             getServerSettings(message.guild.id).then((settings) => {
                 if(instruction[0] == SETTINGS_PREFIX+"doc" || instruction[0] == SETTINGS_PREFIX+"documentation" || instruction[0] == SETTINGS_PREFIX+"help" || instruction[0] == SETTINGS_PREFIX+"man" ||  instruction[0] == SETTINGS_PREFIX+"manual"){
-                    sendMessage(message, documentation(SETTINGS_PREFIX), true);
+                    if(message.member.roles.find(val => val.name.toLowerCase() === settings.arole) != undefined || message.member.roles.find(val => val.name.toLowerCase() === settings.mrole) != undefined || message.member.id == message.guild.ownerID){
+                        sendMessage(message, documentation(SETTINGS_PREFIX, true), true);
+                    } else sendMessage(message, documentation(SETTINGS_PREFIX, false), true);
+                    
                 } else if(instruction[0] == SETTINGS_PREFIX+"settings"){
-        
-                    if(message.guild == null){
-                        sendMessage(message, errorMessage("Please use this instruction from the server chat."), true);
-                        return;
-                    }
                     if(message.member.roles.find(val => val.name.toLowerCase() === settings.arole) != undefined || message.member.roles.find(val => val.name.toLowerCase() === settings.mrole) != undefined || message.member.id == message.guild.ownerID){
                         if(instruction[1] == "arole"){
                             if(instruction[2] != null && instruction[2] != undefined){
